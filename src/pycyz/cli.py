@@ -50,6 +50,25 @@ def cmd_info(cyz: CyzFileData, path: str) -> None:
         print(f"Channels ({len(channels)}): {', '.join(channels)}")
     print()
 
+    scale = cyz.image_scale_um_per_pixel
+    if scale is not None:
+        print("Image calibration:")
+        print(f"  Scale: {scale:.6g} um/pixel")
+        if cyz.pixel_pitch_um is not None:
+            print(f"  Sensor pixel pitch: {cyz.pixel_pitch_um:.6g} um")
+        if cyz.optical_magnification is not None:
+            print(f"  Optical magnification: {cyz.optical_magnification:.6g}x")
+        roi = cyz.image_roi
+        if roi:
+            left, top, w, h = roi
+            print(
+                f"  Camera ROI: {w}x{h} px at ({left},{top})"
+                f"  =  {w * scale:.1f} x {h * scale:.1f} um"
+            )
+        if cyz.camera_name:
+            print(f"  Camera: {cyz.camera_name}")
+        print()
+
     mi = cyz.measurement_info
     if mi:
         start = _get_field(mi, "MeasurementStartTime")
@@ -125,10 +144,22 @@ def cmd_csv(cyz: CyzFileData, csv_path: str) -> None:
     all_particles.sort(key=lambda p: p.id)
 
     channel_names = cyz.channel_names
+    scale = cyz.image_scale_um_per_pixel
+
+    # Image geometry columns are only meaningful when the file has IIF images.
+    # These describe the stored image region (a band cropped out of the camera
+    # frame), NOT a particle bounding box — hence the "fov" naming for the
+    # physical dimensions.
+    image_fields = ["image_x", "image_y", "image_width_px", "image_height_px"]
+    if scale is not None:
+        image_fields += ["image_fov_width_um", "image_fov_height_um"]
+    emit_image_cols = bool(cyz.imaged_particles)
 
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
         header = ["particle_id", "time_of_arrival", "has_image", "n_channels"]
+        if emit_image_cols:
+            header += image_fields
         for name in channel_names:
             for param in _PARAM_FIELDS:
                 header.append(f"ch_{name}_{param}")
@@ -137,6 +168,14 @@ def cmd_csv(cyz: CyzFileData, csv_path: str) -> None:
         for p in all_particles:
             is_imaged = isinstance(p, ImagedParticle)
             row: list = [p.id, p.time_of_arrival.isoformat(), is_imaged, len(p.channel_data)]
+            if emit_image_cols:
+                if is_imaged:
+                    x, y, w, h = p.crop_rect
+                    row += [x, y, w, h]
+                    if scale is not None:
+                        row += [w * scale, h * scale]
+                else:
+                    row += [""] * len(image_fields)
             params_per_ch = p.all_channel_params()
             for i in range(len(channel_names)):
                 if i < len(params_per_ch):

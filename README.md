@@ -69,6 +69,27 @@ for ip in cyz.imaged_particles:
     # ip.image_data is a raw JPEG or PNG blob
 ```
 
+# Image calibration (µm per pixel)
+
+```python
+scale = cyz.image_scale_um_per_pixel      # e.g. 0.28125 µm/px
+print(cyz.pixel_pitch_um, cyz.optical_magnification)   # 4.5 µm, 16.0x
+print(cyz.image_roi)                      # (left, top, 1936, 1464) px
+print(cyz.camera_name)                    # 'PL-D753MU-BL'
+
+# Convert any pixel measurement made on a decoded image to micrometres
+width_um, height_um = cyz.imaged_particles[0].crop_size_um(scale)
+```
+
+The scale is read from `iif.ImageScaleMuPerPixel`, falling back to
+`pixel_pitch_um / optical_magnification` when that field is absent or zero.
+
+> **Note:** `crop_rect` is the region stored out of the camera frame (in
+> practice a full-width band), not a particle bounding box. `crop_size_um`
+> therefore gives the field of view of the saved image — measuring the
+> particle itself requires segmenting the decoded image and multiplying by
+> `image_scale_um_per_pixel`.
+
 # Measurement results (duration, particle counts)
 
 ```python
@@ -122,6 +143,12 @@ pycyz measurement.cyz --info --csv particles.csv --extract-images ./images/
 | `CyzFileData.measurement_info`         | `dict` — measurement metadata                                                                                                       |
 | `CyzFileData.cyto_settings`            | `dict` — instrument configuration                                                                                                   |
 | `CyzFileData.gps_data`                 | `list[dict]` — GPS fixes recorded during measurement                                                                                |
+| `CyzFileData.image_scale_um_per_pixel` | `float \| None` — IIF image scale in µm per pixel                                                                                   |
+| `CyzFileData.pixel_pitch_um`           | `float \| None` — camera sensor pixel pitch (µm)                                                                                    |
+| `CyzFileData.optical_magnification`    | `float \| None` — magnification of the imaging optics                                                                               |
+| `CyzFileData.image_roi`                | `(left, top, w, h) \| None` — camera ROI in pixels                                                                                  |
+| `CyzFileData.camera_name`              | `str \| None` — IIF camera model name                                                                                               |
+| `CyzFileData.iif_settings`             | `dict \| None` — raw `CytoSenseSetting.iif` sub-dict                                                                                |
 | `CyzFileData.measurement_results`      | `MeasurementResults` — duration, particle counts, picture count                                                                     |
 | `CyzFileData.sensor_logs`              | `SensorLogs` — timestamped temperature, pressure, flow, concentration                                                               |
 | `MeasurementResults`                   | Dataclass: `duration_s`, `counted_particles`, `smart_triggered_particles`, `picture_count`                                          |
@@ -134,6 +161,7 @@ pycyz measurement.cyz --info --csv particles.csv --extract-images ./images/
 | `Particle.all_channel_params()`        | `list[PulseParams]` for every channel                                                                                               |
 | `ImagedParticle.image_data`            | `bytes` — JPEG or PNG image blob                                                                                                    |
 | `ImagedParticle.crop_rect`             | `(x, y, w, h)` — crop rectangle in the camera frame                                                                                 |
+| `ImagedParticle.crop_size_um(scale)`   | `(width_um, height_um)` — field of view of the stored image                                                                          |
 | `compute_params(data)`                 | Compute `PulseParams` from a raw `bytes` pulse                                                                                      |
 | `PulseParams`                          | Frozen dataclass: `length`, `total`, `maximum`, `average`, `fill_factor`, `asymmetry`, `centre_of_gravity`, `inertia`, `cell_count` |
 | `NRBFReader`                           | Low-level MS-NRBF stream deserializer (exposed for advanced use)                                                                    |

@@ -70,6 +70,17 @@ def _find_nested(d: Any, *keys: str) -> Any:
     return None
 
 
+def _positive_float(v: Any) -> float | None:
+    """Return *v* as a float if it is a positive number, else ``None``.
+
+    Unset numeric settings are serialized as ``0``, which is never a
+    meaningful value for the scales and pitches read here.
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v) if v > 0 else None
+
+
 @dataclass
 class SegmentInfo:
     offset: int
@@ -142,6 +153,22 @@ class ImagedParticle(Particle):
 
     image_data: bytes = b""
     crop_rect: tuple[int, int, int, int] = (0, 0, 0, 0)
+
+    def crop_size_um(self, um_per_pixel: float) -> tuple[float, float]:
+        """Physical width and height of :attr:`crop_rect` in micrometres.
+
+        This is the field of view of the stored image, *not* the size of the
+        particle: the crop is a full-width band cut out of the camera frame,
+        so the particle occupies only part of it.  Measuring the particle
+        itself requires segmenting the decoded image and scaling the result by
+        *um_per_pixel*.
+
+        Parameters
+        ----------
+        um_per_pixel:
+            Image scale, from :attr:`CyzFileData.image_scale_um_per_pixel`.
+        """
+        return (self.crop_rect[2] * um_per_pixel, self.crop_rect[3] * um_per_pixel)
 
     @staticmethod
     def from_dict(d: dict) -> ImagedParticle:
@@ -236,6 +263,96 @@ class CyzFileData:
         if isinstance(gps, list):
             return [g for g in gps if isinstance(g, dict)]
         return []
+
+    @property
+    def iif_settings(self) -> dict | None:
+        """Raw ``CytoSenseSetting.iif`` sub-dict (camera / imaging settings)."""
+        cs = self.cyto_settings
+        if not cs:
+            return None
+        iif = _get_field(cs, "iif") or _get_field(cs, "_iif")
+        return iif if isinstance(iif, dict) else None
+
+    @property
+    def camera_name(self) -> str | None:
+        """Model name of the IIF camera, e.g. ``'PL-D753MU-BL'``."""
+        iif = self.iif_settings
+        if not iif:
+            return None
+        cam = _get_field(iif, "Camera")
+        if not isinstance(cam, dict):
+            return None
+        name = _get_field(cam, "CameraName")
+        return name if isinstance(name, str) and name else None
+
+    @property
+    def image_roi(self) -> tuple[int, int, int, int] | None:
+        """Camera region of interest as ``(left, top, width, height)`` in pixels.
+
+        This is the full frame the camera delivers; individual particle images
+        are crops out of it (see :attr:`ImagedParticle.crop_rect`).
+        """
+        iif = self.iif_settings
+        if not iif:
+            return None
+        vals = []
+        for key in ("ROILeft", "ROITop", "ROIWidth", "ROIHeight"):
+            v = _get_field(iif, key)
+            if not isinstance(v, int):
+                return None
+            vals.append(v)
+        if vals[2] <= 0 or vals[3] <= 0:
+            return None
+        return (vals[0], vals[1], vals[2], vals[3])
+
+    @property
+    def pixel_pitch_um(self) -> float | None:
+        """Physical pixel pitch of the camera sensor in µm.
+
+        Read from ``CytoSenseSetting.iif.CameraFeatures.PixelPitch``.
+        """
+        iif = self.iif_settings
+        if not iif:
+            return None
+        feats = _get_field(iif, "CameraFeatures")
+        if not isinstance(feats, dict):
+            return None
+        return _positive_float(_get_field(feats, "PixelPitch"))
+
+    @property
+    def optical_magnification(self) -> float | None:
+        """Magnification of the imaging optics (``iif.opticalMagnification``)."""
+        iif = self.iif_settings
+        if not iif:
+            return None
+        return _positive_float(_get_field(iif, "opticalMagnification"))
+
+    @property
+    def image_scale_um_per_pixel(self) -> float | None:
+        """Image scale in micrometres per pixel, or ``None`` if unavailable.
+
+        This is the calibration needed to convert :attr:`ImagedParticle.crop_rect`
+        or any measurement made on the decoded image into physical units.
+
+        The value stored in ``iif.ImageScaleMuPerPixel`` is preferred.  Note the
+        same dict also carries a ``_ImageScaleMuPerPixel`` backing field which is
+        commonly ``0.0``; it is deliberately *not* consulted.  When the stored
+        scale is missing or zero, the scale is derived from the sensor geometry
+        as ``pixel_pitch_um / optical_magnification``.
+        """
+        iif = self.iif_settings
+        if not iif:
+            return None
+
+        stored = _positive_float(iif.get("ImageScaleMuPerPixel"))
+        if stored is not None:
+            return stored
+
+        pitch = self.pixel_pitch_um
+        mag = self.optical_magnification
+        if pitch is not None and mag is not None:
+            return pitch / mag
+        return None
 
     @property
     def channel_names(self) -> list[str]:
